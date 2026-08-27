@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+.env
+
+# Streamlit secrets (重要！)
+.streamlit/secrets.toml
+
+# IDE
+.vscode/
+.idea/
+
+# 数据库文件 (如果你不希望上传测试数据)
+*.db
+*.sqlite

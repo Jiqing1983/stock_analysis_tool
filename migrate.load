@@ -1,0 +1,7 @@
+LOAD DATABASE
+     FROM sqlite:///C:/Users/zjq/stock_analysis_tool/data/stock_analysis.db
+     INTO postgresql://zhangjiqing:zhangjiqing1983%40@rm-cn-d4h4xuv060001eio.rwlb.rds.aliyuncs.com:5432/stock_analysis  -- 替换为你的PostgreSQL连接信息
+
+WITH include drop, create tables, create indexes, reset sequences
+
+SET work_mem to '16MB', maintenance_work_mem to '512 MB';

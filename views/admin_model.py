@@ -17,7 +17,7 @@ def show():
     # ========== 加载保存的训练参数 ==========
     train_settings = {
         "model": "deepseek-v4-flash",
-        "max_tokens": 32000,
+        "max_tokens": 100000,
         "temperature": 0.7,
         "enable_search": True,
         "system_prompt": "你是一位专业的股票分析师，拥有丰富的金融市场分析经验。请基于可获得的信息，对股票进行客观、全面的分析。"
@@ -31,10 +31,8 @@ def show():
             try:
                 saved = json.loads(config.config_value)
                 train_settings.update(saved)
-                # 打印日志（调试）
-                print(f"加载训练参数: {saved}")
-            except Exception as e:
-                print(f"加载训练参数失败: {e}")
+            except:
+                pass
     
     # 初始化 DeepSeek 客户端
     if "train_client" not in st.session_state:
@@ -45,7 +43,7 @@ def show():
     
     client = st.session_state.train_client
     
-    # ========== 自动加载激活的会话 ==========
+    # ========== 自动加载当前激活的会话（仅当 train_session_id 为空时） ==========
     active_session_id = None
     active_messages = []
     
@@ -55,43 +53,32 @@ def show():
         ).order_by(
             ModelTrainingLog.created_at.desc()
         ).first()
-        
         if active_log:
             active_session_id = active_log.session_id
             active_messages = active_log.messages
     
-    if active_session_id:
-        if st.session_state.train_session_id != active_session_id:
-            st.session_state.train_history = active_messages
-            client._conversation_history = active_messages
-            st.session_state.train_session_id = active_session_id
-            if not st.session_state.auto_load_notified:
-                st.info(f"已自动加载激活的会话: {active_session_id}")
-                st.session_state.auto_load_notified = True
+    # 关键修改：只有当 train_session_id 为 None 时，才自动加载激活会话
+    if active_session_id and st.session_state.train_session_id is None:
+        st.session_state.train_history = active_messages
+        client._conversation_history = active_messages
+        st.session_state.train_session_id = active_session_id
+        if not st.session_state.auto_load_notified:
+            st.info(f"已自动加载激活的会话: {active_session_id}")
+            st.session_state.auto_load_notified = True
     else:
-        if st.session_state.train_session_id is not None:
-            st.session_state.train_history = []
-            client._conversation_history = []
-            st.session_state.train_session_id = None
-            st.session_state.auto_load_notified = False
+        # 如果 train_session_id 不为 None，保留当前界面内容，不覆盖
+        pass
     
     history = st.session_state.train_history
     
-    # === 模型配置（使用保存的参数作为默认值） ===
+    # === 模型配置 ===
     with st.expander("⚙️ 模型配置", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
-            model_options = ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"]
-            current_model = train_settings.get("model", "deepseek-v4-flash")
-            try:
-                default_index = model_options.index(current_model)
-            except ValueError:
-                default_index = 0
-
             model = st.selectbox(
                 "模型选择",
-                model_options,
-                index=default_index,
+                ["deepseek-v4-flash", "deepseek-v4-pro"],
+                index=0 if train_settings["model"] == "deepseek-v4-flash" else 1,
                 key="train_model_select"
             )
             client.model = model
@@ -100,7 +87,7 @@ def show():
             max_tokens = st.number_input(
                 "最大输出Token",
                 min_value=100,
-                max_value=32000,
+                max_value=100000,
                 value=train_settings["max_tokens"],
                 step=100,
                 key="train_max_tokens"
@@ -120,7 +107,6 @@ def show():
             key="train_enable_search"
         )
         
-        # 系统提示词
         system_prompt = st.text_area(
             "系统提示词（System Prompt）",
             value=train_settings["system_prompt"],
@@ -129,10 +115,8 @@ def show():
             key="train_system_prompt"
         )
         
-        # 显示当前生效的 max_tokens（调试信息）
-        st.caption(f"当前最大Token: {max_tokens} (将在下次对话时生效)")
+        st.caption(f"当前最大Token: {max_tokens}")
         
-        # 保存参数按钮
         if st.button("💾 保存参数设置", use_container_width=True):
             new_settings = {
                 "model": model,
@@ -154,8 +138,7 @@ def show():
                         description="模型训练参数设置"
                     )
                     session.add(config)
-            st.success(f"✅ 参数已保存（最大Token: {max_tokens}）")
-            # 刷新页面，使新参数立即生效
+            st.success(f"✅ 参数已保存")
             st.rerun()
     
     # === 对话区域 ===
@@ -165,6 +148,14 @@ def show():
         with st.container():
             st.success(f"当前会话: {st.session_state.train_session_id}，包含 {len(history)} 条消息")
             if st.button("清空当前会话历史"):
+                # 删除数据库中的记录
+                with db_manager.get_session() as session:
+                    log = session.query(ModelTrainingLog).filter_by(
+                        session_id=st.session_state.train_session_id
+                    ).first()
+                    if log:
+                        session.delete(log)
+                        session.commit()
                 client.clear_history()
                 st.session_state.train_history = []
                 st.session_state.train_session_id = None
@@ -182,6 +173,14 @@ def show():
                     if st.session_state.get(f"confirm_del_{i}", False):
                         if client.delete_history_item(i):
                             st.session_state.train_history = client.get_history()
+                            # 更新数据库
+                            with db_manager.get_session() as session:
+                                log = session.query(ModelTrainingLog).filter_by(
+                                    session_id=st.session_state.train_session_id
+                                ).first()
+                                if log:
+                                    log.messages = client.get_history()
+                                    session.commit()
                             st.rerun()
                     else:
                         st.session_state[f"confirm_del_{i}"] = True
@@ -197,20 +196,19 @@ def show():
         with st.chat_message("assistant"):
             with st.spinner("AI思考中..."):
                 try:
-                    # ===== 关键：显式传递所有参数 =====
                     result = client.chat_with_history(
                         user_message=user_input,
                         system_prompt=system_prompt,
                         enable_search=enable_search,
-                        max_tokens=max_tokens,          # 传递当前控件值
-                        temperature=temperature,        # 传递当前控件值
-                        model=model                     # 传递模型
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                        model=model
                     )
                     
                     st.write(result["content"])
                     st.caption(f"Token使用: {result['usage']['total_tokens']} | 费用: ¥{result['usage']['total_tokens']/1000*0.01:.4f}")
                     
-                    # 保存到数据库
+                    # 自动保存到数据库
                     current_session_id = st.session_state.train_session_id
                     if not current_session_id:
                         current_session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -223,14 +221,17 @@ def show():
                         if log:
                             log.messages = client.get_history()
                             log.tokens_used = result["usage"]["total_tokens"]
+                            if log.status != 'active':
+                                log.status = 'archived'
                         else:
                             log = ModelTrainingLog(
                                 session_id=current_session_id,
                                 messages=client.get_history(),
                                 tokens_used=result["usage"]["total_tokens"],
-                                status="archived"
+                                status='archived'
                             )
                             session.add(log)
+                        session.commit()
                     
                     st.session_state.train_history = client.get_history()
                     st.rerun()
@@ -267,41 +268,17 @@ def show():
         st.info("暂无对话历史")
     
     # === 会话管理 ===
+    st.divider()
     col1, col2 = st.columns(2)
     with col1:
         if st.button("🔄 新建会话"):
+            # 清空界面，不修改全局激活状态
             client.clear_history()
             st.session_state.train_history = []
             st.session_state.train_session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             st.session_state.auto_load_notified = False
-            st.success("✅ 已新建会话")
+            st.success(f"✅ 已新建会话（会话 ID: {st.session_state.train_session_id}），全局激活上下文保持不变")
             st.rerun()
-    
-    with col2:
-        if st.button("💾 保存当前会话（存档）"):
-            if not st.session_state.train_history:
-                st.warning("当前无对话历史可保存")
-            else:
-                current_session_id = st.session_state.train_session_id
-                if not current_session_id:
-                    current_session_id = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                    st.session_state.train_session_id = current_session_id
-                
-                with db_manager.get_session() as session:
-                    log = session.query(ModelTrainingLog).filter_by(
-                        session_id=current_session_id
-                    ).first()
-                    if log:
-                        log.messages = client.get_history()
-                        log.status = "archived"
-                    else:
-                        log = ModelTrainingLog(
-                            session_id=current_session_id,
-                            messages=client.get_history(),
-                            status="archived"
-                        )
-                        session.add(log)
-                st.success("✅ 会话已保存（状态：存档）")
     
     # === 历史会话 ===
     with st.expander("📚 历史会话", expanded=False):
@@ -326,12 +303,13 @@ def show():
                 col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 with col1:
                     st.write(f"**{log_data['session_id']}**")
-                    st.caption(f"创建: {log_data['created_at']} | Token: {log_data['tokens_used']} | 状态: {'✅ 激活' if log_data['status']=='active' else '📦 存档'}")
+                    st.caption(f"创建: {log_data['created_at']} | Token: {log_data['tokens_used']} | 状态: {'✅ 当前激活' if log_data['status']=='active' else '📦 存档'}")
                 with col2:
                     if st.button("📂 加载", key=f"load_{log_data['id']}"):
                         st.session_state.train_history = log_data['messages']
                         client._conversation_history = log_data['messages']
                         st.session_state.train_session_id = log_data['session_id']
+                        st.session_state.auto_load_notified = False
                         st.rerun()
                 with col3:
                     if log_data['status'] != 'active':
@@ -348,7 +326,7 @@ def show():
                             client._conversation_history = log_data['messages']
                             st.session_state.train_session_id = log_data['session_id']
                             st.session_state.auto_load_notified = False
-                            st.success(f"已激活会话 {log_data['session_id']}")
+                            st.success(f"已激活会话 {log_data['session_id']}，该会话将成为全局上下文")
                             st.rerun()
                     else:
                         st.write("✅ 当前激活")

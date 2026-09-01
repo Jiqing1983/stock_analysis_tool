@@ -34,7 +34,6 @@ class DatabaseManager:
         
         # 确保数据目录存在
         if database_url.startswith("sqlite:///"):
-            
             db_path = database_url.replace("sqlite:///", "")
             os.makedirs(os.path.dirname(db_path), exist_ok=True)
         

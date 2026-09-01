@@ -1,18 +1,15 @@
 """
-Streamlit主入口
-负责路由和页面分发
+Streamlit主入口 - 自定义认证版本
 """
 import streamlit as st
-import streamlit_authenticator as stauth
-import yaml
-from yaml.loader import SafeLoader
 import os
 from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
-# 加载环境变量
+# 加载环境变量（本地开发用）
 load_dotenv()
 
-# 页面配置
+# ==================== 页面配置 ====================
 st.set_page_config(
     page_title="智能股票分析系统",
     page_icon="📈",
@@ -20,79 +17,79 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 初始化数据库
+# ==================== 数据库初始化 ====================
 from database.db_manager import db_manager
 db_manager.initialize()
 
-# 加载认证配置
-def load_auth_config():
-    config_path = "config.yaml"
-    if not os.path.exists(config_path):
-        # 创建默认配置
-        default_config = {
-            "cookie": {
-                "expiry_days": 30,
-                "key": os.getenv("SECRET_KEY", "random_key"),
-                "name": "stock_analysis_cookie"
-            },
-            "credentials": {
-                "usernames": {
-                    os.getenv("ADMIN_USERNAME", "admin"): {
-                        "email": "admin@example.com",
-                        "first_name": "Admin",
-                        "last_name": "User",
-                        "password": os.getenv("ADMIN_PASSWORD", "admin123"),
-                        "roles": ["admin"]
-                    }
-                }
-            },
-            "pre-authorized": {
-                "emails": []
-            }
-        }
-        with open(config_path, "w") as f:
-            yaml.dump(default_config, f)
+# ==================== 导入自定义模块 ====================
+from database.models import User, UserRole
+from core.auth import hash_password, verify_password
+
+# ==================== 确保管理员账户存在 ====================
+def ensure_admin_user():
+    """从环境变量（Secrets）读取管理员凭据，若不存在则创建"""
+    admin_username = os.getenv("ADMIN_USERNAME", "admin")
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+    admin_email = os.getenv("ADMIN_EMAIL", "admin@example.com")
     
-    with open(config_path) as file:
-        return yaml.load(file, Loader=SafeLoader)
+    with db_manager.get_session() as session:
+        admin = session.query(User).filter_by(username=admin_username).first()
+        if not admin:
+            hashed = hash_password(admin_password)
+            admin = User(
+                username=admin_username,
+                email=admin_email,
+                password_hash=hashed,
+                role=UserRole.ADMIN,
+                balance=100.0,
+                total_tokens_used=0,
+                membership_expiry=datetime.utcnow() + timedelta(days=365),
+                is_active=True
+            )
+            session.add(admin)
+            session.commit()
 
-config = load_auth_config()
-authenticator = stauth.Authenticate(
-    config["credentials"],
-    config["cookie"]["name"],
-    config["cookie"]["key"],
-    config["cookie"]["expiry_days"]
-)
 
-# 登录状态管理
+# 执行管理员初始化
+ensure_admin_user()
+
+# ==================== 会话状态初始化 ====================
 if "authentication_status" not in st.session_state:
     st.session_state["authentication_status"] = None
 if "username" not in st.session_state:
     st.session_state["username"] = None
+if "page" not in st.session_state:
+    st.session_state["page"] = "📊 我的分析"
 
+# ==================== 登录与登出函数 ====================
 def login():
-    """显示登录表单并处理登录"""
-    result = authenticator.login(
-        location="main",
-        fields={
-            "Form name": "登录",
-            "Username": "用户名",
-            "Password": "密码",
-            "Login": "登录"
-        }
-    )
-    if result is None:
-        return
-    name, authentication_status, username = result
-    if authentication_status:
-        st.session_state["authentication_status"] = authentication_status
-        st.session_state["username"] = username
-        st.session_state["name"] = name
+    """显示登录表单"""
+    st.sidebar.title("🔐 登录")
+    with st.sidebar.form("login_form"):
+        username = st.text_input("用户名", placeholder="请输入用户名")
+        password = st.text_input("密码", type="password", placeholder="请输入密码")
+        submitted = st.form_submit_button("登录")
+        
+        if submitted:
+            if not username or not password:
+                st.sidebar.error("用户名和密码不能为空")
+                return
+            
+            with db_manager.get_session() as session:
+                user = session.query(User).filter_by(username=username).first()
+                if user and verify_password(password, user.password_hash):
+                    st.session_state["authentication_status"] = True
+                    st.session_state["username"] = username
+                    st.session_state["name"] = username
+                    st.rerun()
+                else:
+                    st.sidebar.error("用户名或密码错误")
+    
+    # 注册入口
+    st.sidebar.markdown("---")
+    if st.sidebar.button("📝 还没有账号？立即注册"):
+        st.session_state["page"] = "register"
         st.rerun()
-    elif authentication_status is False:
-        st.error("用户名或密码错误")
-    elif authentication_status is None:
-        st.info("请输入用户名和密码")
 
 def logout():
     """退出登录"""
@@ -101,134 +98,94 @@ def logout():
             del st.session_state[key]
     st.rerun()
 
+# ==================== 主函数 ====================
 def main():
-    # 未登录 -> 显示登录
+    # ---------- 未登录 ----------
     if not st.session_state.get("authentication_status", False):
-        login()
+        login()  # 显示登录表单
+        
+        # 如果用户点击了注册，则显示注册页面（覆盖登录表单区域）
+        if st.session_state.get("page") == "register":
+            from views.register import show
+            show()
         return
-
+    
+    # ---------- 已登录 ----------
     username = st.session_state["username"]
-
-    # ===== 同步/获取用户信息（在会话内完成所有属性提取） =====
-    from database.db_manager import db_manager
-    from database.models import User, UserRole
-    from datetime import datetime, timedelta
-    import yaml
-
+    
+    # 从数据库获取用户信息（在会话内提取所有属性）
     with db_manager.get_session() as session:
         user = session.query(User).filter_by(username=username).first()
-
         if not user:
-            # 从 config.yaml 获取用户信息
-            with open("config.yaml", "r", encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-
-            user_data = config["credentials"]["usernames"].get(username, {})
-
-            new_user = User(
-                username=username,
-                email=user_data.get("email", f"{username}@example.com"),
-                password_hash="",
-                role=UserRole.ADMIN if "admin" in user_data.get("roles", []) else UserRole.USER,
-                balance=10.0,
-                total_tokens_used=0,
-                membership_expiry=datetime.utcnow() + timedelta(days=30),
-                first_name=user_data.get("first_name", ""),
-                last_name=user_data.get("last_name", ""),
-                is_active=True
-            )
-            session.add(new_user)
-            session.commit()
-            # 重新查询以获取完整对象
-            user = session.query(User).filter_by(username=username).first()
-
-        if not user:
-            st.error("用户同步失败，请检查数据库")
+            st.error("用户不存在，请重新登录")
+            logout()
             return
-
-        # 在会话内提取所有需要的属性，保存为普通变量
         user_id = user.id
         role = user.role.value
         balance = user.balance
         total_tokens_used = user.total_tokens_used
-        membership_expiry = user.membership_expiry
-        is_member_active = user.is_member_active()
-        first_name = user.first_name
-        last_name = user.last_name
-        email = user.email
-
-    # ============================================
-
-    # 侧边栏
+    
+    # ---------- 侧边栏 ----------
     with st.sidebar:
         st.title("📈 股票分析系统")
-        st.write(f"👤 欢迎, {st.session_state['name']}")
+        st.write(f"👤 欢迎, {username}")
         st.write(f"📋 角色: {'管理员' if role == 'admin' else '普通用户'}")
-
+        
         if role == "user":
             st.metric("💰 账户余额", f"¥{balance:.2f}")
             st.metric("📊 已用Token", f"{total_tokens_used:,}")
-
+        
         st.divider()
-
-        # 导航
+        
+        # 导航菜单
         if role == "admin":
-            if "page" not in st.session_state:
-                st.session_state.page = "📊 用户面板"
             page_options = ["📊 用户面板", "📊 我的分析", "🧠 模型训练", "⚙️ 模型设置", "👥 用户管理"]
-            selected = st.radio(
-                "导航",
-                page_options,
-                index=page_options.index(st.session_state.page),
-                key="admin_nav"
-            )
-            if selected != st.session_state.page:
-                st.session_state.page = selected
-                st.rerun()
-            page = st.session_state.page
         else:
-            if "page" not in st.session_state:
-                st.session_state.page = "📊 我的分析"
-            page_options = ["📊 我的分析", "👤 个人设置"]
-            selected = st.radio(
-                "导航",
-                page_options,
-                index=page_options.index(st.session_state.page),
-                key="user_nav"
-            )
-            if selected != st.session_state.page:
-                st.session_state.page = selected
-                st.rerun()
-            page = st.session_state.page
-
+            page_options = ["📖 模型简介","📊 我的分析", "👤 个人设置"]
+        
+        # 确保当前页面在选项列表中
+        if st.session_state.page not in page_options:
+            st.session_state.page = page_options[0]
+        
+        selected = st.radio("导航", page_options, index=page_options.index(st.session_state.page))
+        if selected != st.session_state.page:
+            st.session_state.page = selected
+            st.rerun()
+        
         st.divider()
         if st.button("🚪 退出登录"):
             logout()
-
-    # ===== 页面路由 =====
+    
+    # ---------- 页面路由 ----------
+    page = st.session_state.page
+    
     if role == "admin":
         if page == "📊 用户面板":
-            from pages.admin_dashboard import show
+            from views.admin_dashboard import show
             show()
         elif page == "📊 我的分析":
-            from pages.user_dashboard import show
-            show(user_id)   # 管理员自己的分析列表
+            from views.user_dashboard import show
+            show(user_id)
         elif page == "🧠 模型训练":
-            from pages.admin_model import show
+            from views.admin_model import show
             show()
         elif page == "⚙️ 模型设置":
-            from pages.admin_settings import show
+            from views.admin_settings import show
             show()
         elif page == "👥 用户管理":
-            from pages.admin_users import show
+            from views.admin_users import show
             show()
-    else:
-        if page == "📊 我的分析":
-            from pages.user_dashboard import show
+    else:  # 普通用户
+        if page == "📖 模型简介":
+            from views.intro import show
+            show()
+        elif page == "📊 我的分析":
+            from views.user_dashboard import show
             show(user_id)
         elif page == "👤 个人设置":
-            from pages.user_settings import show
+            from views.user_settings import show
             show(user_id)
 
+# ==================== 程序入口 ====================
 if __name__ == "__main__":
     main()

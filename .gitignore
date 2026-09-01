@@ -14,3 +14,8 @@ venv/
 # 数据库文件 (如果你不希望上传测试数据)
 *.db
 *.sqlite
+
+# 敏感配置文件
+config.yaml
+*.yaml
+*.yml

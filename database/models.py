@@ -8,9 +8,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
-
+import json
 Base = declarative_base()
 
 
@@ -44,11 +44,14 @@ class User(Base):
     analyses = relationship("StockAnalysis", back_populates="user")
     payments = relationship("Payment", back_populates="user")
     
-    def is_member_active(self) -> bool:
-        """检查会员是否有效"""
-        if not self.membership_expiry:
-            return False
-        return datetime.utcnow() < self.membership_expiry
+def is_member_active(self) -> bool:
+    from datetime import datetime, timezone
+    if not self.membership_expiry:
+        return False
+    expiry = self.membership_expiry
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) < expiry
 
 
 class StockAnalysis(Base):
@@ -76,10 +79,17 @@ class StockAnalysis(Base):
     user = relationship("User", back_populates="analyses")
     
     def to_dict(self, fields: list = None) -> dict:
-        """转换为字典，可指定字段列表"""
+        """转换为字典，自动解析 JSON 字符串"""
+        data = self.analysis_data
+        # 如果 data 是字符串，尝试解析为 JSON
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
         if fields:
-            return {f: self.analysis_data.get(f, "") for f in fields}
-        return self.analysis_data
+            return {f: data.get(f, "") for f in fields}
+        return data
 
 
 class Payment(Base):

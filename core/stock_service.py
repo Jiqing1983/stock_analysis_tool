@@ -65,6 +65,8 @@ class StockAnalysisService:
             self._analysis_template = fields
     
     def get_training_context(self) -> List[Dict[str, str]]:
+        """获取当前激活的训练对话历史（作为上下文）"""
+        import json
         with db_manager.get_session() as session:
             log = session.query(ModelTrainingLog).filter_by(
                 status='active'
@@ -72,8 +74,26 @@ class StockAnalysisService:
                 ModelTrainingLog.created_at.desc()
             ).first()
             if log and log.messages:
-                return log.messages
-        return []
+                messages = log.messages
+                # 如果 messages 是字符串，解析为 JSON
+                if isinstance(messages, str):
+                    try:
+                        messages = json.loads(messages)
+                    except:
+                        messages = []
+                # 如果 messages 是列表，确保每个元素是字典
+                if isinstance(messages, list):
+                    parsed = []
+                    for item in messages:
+                        if isinstance(item, str):
+                            try:
+                                item = json.loads(item)
+                            except:
+                                continue
+                        if isinstance(item, dict):
+                            parsed.append(item)
+                    return parsed
+            return []
     
     def parse_stock_codes(self, input_text: str) -> List[str]:
         if not input_text:

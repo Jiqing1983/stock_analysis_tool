@@ -55,7 +55,16 @@ def show():
         ).first()
         if active_log:
             active_session_id = active_log.session_id
-            active_messages = active_log.messages
+            raw_messages = active_log.messages
+            if isinstance(raw_messages, str):
+                try:
+                    active_messages = json.loads(raw_messages)
+                except:
+                    active_messages = []
+            elif isinstance(raw_messages, list):
+                active_messages = raw_messages
+            else:
+                active_messages = []
     
     # 关键修改：只有当 train_session_id 为 None 时，才自动加载激活会话
     if active_session_id and st.session_state.train_session_id is None:

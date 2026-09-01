@@ -28,11 +28,67 @@ class TokenManager:
     
     def get_user_info(self, user_id: int) -> Optional[dict]:
         """获取用户完整信息"""
+        from datetime import datetime, timezone
+        
         with db_manager.get_session() as session:
             user = session.query(User).filter_by(id=user_id).first()
             if not user:
                 return None
             
+            # 计算会员状态（兼容 naive 和 aware）
+            is_active = False
+            expiry = user.membership_expiry
+            if expiry:
+                # 如果 expiry 是 naive（无时区），添加 UTC 时区
+                if expiry.tzinfo is None:
+                    expiry = expiry.replace(tzinfo=timezone.utc)
+                is_active = datetime.now(timezone.utc) < expiry
+            
+            return {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role.value,
+                "balance": user.balance,
+                "total_tokens_used": user.total_tokens_used,
+                "membership_expiry": user.membership_expiry.isoformat() if user.membership_expiry else None,
+                "is_member_active": is_active,
+                "created_at": user.created_at.isoformat()
+            }
+        """获取用户完整信息"""
+        from datetime import datetime, timezone  # 确保导入
+        
+        with db_manager.get_session() as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return None
+            
+            # 直接计算会员状态（不依赖 User 对象的方法）
+            is_active = False
+            if user.membership_expiry:
+                is_active = datetime.now(timezone.utc) < user.membership_expiry
+            
+            return {
+                "id": user.id,
+                "username": user.username,
+                "email": user.email,
+                "role": user.role.value,
+                "balance": user.balance,
+                "total_tokens_used": user.total_tokens_used,
+                "membership_expiry": user.membership_expiry.isoformat() if user.membership_expiry else None,
+                "is_member_active": is_active,
+                "created_at": user.created_at.isoformat()
+            }
+        """获取用户完整信息"""
+        with db_manager.get_session() as session:
+            user = session.query(User).filter_by(id=user_id).first()
+            if not user:
+                return None
+            
+            # 直接计算会员状态（不依赖 User 对象的方法）
+            is_active = False
+            if user.membership_expiry:
+                is_active = datetime.now(timezone.utc) < user.membership_expiry
             return {
                 "id": user.id,
                 "username": user.username,

@@ -37,6 +37,15 @@ def update_price_in_text(text, new_price):
         return f"{prefix}{formatted_price}{suffix}"
     return str(new_price)
 
+def get_analysis_data(obj):
+    data = obj.analysis_data
+    if isinstance(data, str):
+        import json
+        try:
+            return json.loads(data)
+        except:
+            return {}
+    return data
 
 def show():
     st.title("📊 管理员仪表盘")
@@ -59,7 +68,7 @@ def show():
         
         ranking = []
         for a in analyses:
-            data = a.analysis_data
+            data = get_analysis_data(a)
             if data and "赔率" in data:
                 odds = extract_number(data.get("赔率"))
                 if odds is None:
@@ -143,7 +152,7 @@ def show():
                     ).all()
                     
                     for a in analyses_to_update:
-                        data = a.analysis_data
+                        data = get_analysis_data(a)
                         if data is None:
                             data = {}
                         

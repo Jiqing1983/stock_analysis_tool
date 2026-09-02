@@ -19,7 +19,18 @@ st.set_page_config(
 
 # ==================== 数据库初始化 ====================
 from database.db_manager import db_manager
+
+import re
+# 在 db_manager.initialize() 之前
+db_url = os.getenv("DATABASE_URL")
+if db_url:
+    # 隐藏密码部分
+    masked = re.sub(r'://[^:]+:([^@]+)@', r'://***:***@', db_url)
+    st.sidebar.write(f"📊 数据库连接: {masked}")
+else:
+    st.sidebar.write("⚠️ DATABASE_URL 未配置")
 db_manager.initialize()
+st.write(f"当前数据库: {os.getenv('DATABASE_URL', '未设置')}")
 
 # ==================== 导入自定义模块 ====================
 from database.models import User, UserRole
